@@ -1,0 +1,143 @@
+- name: Deploy LazyFiller Infrastructure
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    app_dir: /opt/app
+    nginx_dir: /opt/app/nginx
+    scripts_dir: /opt/app/scripts
+    backups_dir: /opt/app/backups
+
+  pre_tasks:
+    - name: Validate deployment target
+      assert:
+        that:
+          - app_environment is defined
+          - app_environment in ['staging', 'production']
+        fail_msg: "app_environment must be 'staging' or 'production'"
+
+    - name: Verify app directory exists
+      stat:
+        path: '{{ app_dir }}'
+      register: app_dir_stat
+      failed_when: not app_dir_stat.stat.exists
+
+    - name: Verify Docker is running
+      systemd:
+        name: docker
+        state: started
+      check_mode: true
+
+    - name: Login to GitHub Container Registry
+      shell: echo '{{ vault_ghcr_token }}' | docker login ghcr.io -u '{{ vault_ghcr_username }}' --password-stdin
+      no_log: true
+      changed_when: false
+
+    - name: Pull images before deployment
+      command: docker compose pull
+      args:
+        chdir: '{{ app_dir }}'
+      register: pull_result
+      changed_when: "'Pulled' in pull_result.stderr or 'Downloaded' in pull_result.stderr"
+
+  tasks:
+    - name: Ensure directories exist
+      file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ nginx_dir }}'
+        - '{{ scripts_dir }}'
+        - '{{ backups_dir }}'
+
+    - name: Deploy docker-compose.yml
+      template:
+        src: ../templates/docker-compose.yml.j2
+        dest: '{{ app_dir }}/docker-compose.yml'
+        owner: root
+        group: root
+        mode: '0644'
+      register: compose_config
+
+    - name: Deploy nginx.conf
+      template:
+        src: ../templates/nginx.conf.j2
+        dest: '{{ nginx_dir }}/nginx.conf'
+        owner: root
+        group: root
+        mode: '0644'
+      register: nginx_config
+
+    - name: Deploy .env file
+      template:
+        src: ../templates/env.j2
+        dest: '{{ app_dir }}/.env'
+        owner: root
+        group: cmn
+        mode: '0640'
+      register: env_config
+
+    - name: Deploy migration script
+      template:
+        src: ../templates/migrate.sh.j2
+        dest: '{{ scripts_dir }}/migrate.sh'
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Restart containers (config changed)
+      when: compose_config.changed or env_config.changed
+      block:
+        - name: Bring up containers
+          command: docker compose up -d
+          args:
+            chdir: '{{ app_dir }}'
+          register: compose_up
+
+      rescue:
+        - name: Capture failure state
+          command: docker compose ps -a
+          args:
+            chdir: '{{ app_dir }}'
+          register: failed_ps
+          changed_when: false
+
+        - name: Capture container logs
+          command: docker compose logs --tail=30
+          args:
+            chdir: '{{ app_dir }}'
+          register: failed_logs
+          changed_when: false
+
+        - name: Deployment failed
+          fail:
+            msg: |
+              Deployment failed. Container status:
+              {{ failed_ps.stdout }}
+
+              Recent logs:
+              {{ failed_logs.stdout }}
+
+    - name: Reload nginx only (nginx config changed)
+      when: nginx_config.changed and not compose_config.changed and not env_config.changed
+      command: docker compose exec -T nginx nginx -s reload
+      args:
+        chdir: '{{ app_dir }}'
+
+  post_tasks:
+    - name: Verify deployment
+      command: docker compose ps --format json
+      args:
+        chdir: '{{ app_dir }}'
+      register: final_status
+      changed_when: false
+
+    - name: Deployment summary
+      debug:
+        msg: |
+          ✓ Deployed to {{ app_environment }}
+          ✓ Location: {{ app_dir }}

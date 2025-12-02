@@ -1,0 +1,206 @@
+x-gotenberg: &gotenberg-base
+  image: gotenberg/gotenberg:{{ gotenberg_image_tag }}
+  command:
+    - gotenberg
+    - --api-timeout=300s
+    - --libreoffice-restart-after=50
+    - --libreoffice-auto-start=false
+    - --chromium-disable-routes=true
+    - --log-level=warn
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '1'
+  expose:
+    - '3000'
+  healthcheck:
+    test: ['CMD', 'curl', '-fsS', 'http://localhost:3000/health']
+    interval: 30s
+    timeout: 5s
+    start_period: 5s
+    retries: 5
+  deploy:
+    resources:
+      limits:
+        memory: {{ gotenberg_memory_limit }}
+        cpus: '{{ gotenberg_cpu_limit }}'
+      reservations:
+        memory: {{ gotenberg_memory_reservation }}
+        cpus: '{{ gotenberg_cpu_reservation }}'
+  networks:
+    - internal
+  restart: unless-stopped
+  stop_grace_period: 10s
+
+services:
+  postgres:
+    image: postgres:{{ postgres_image_tag }}
+    env_file:
+      - path: .env
+        required: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '1'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: {{ postgres_memory_limit }}
+          cpus: '{{ postgres_cpu_limit }}'
+        reservations:
+          memory: {{ postgres_memory_reservation }}
+          cpus: '{{ postgres_cpu_reservation }}'
+    networks:
+      - internal
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  gotenberg1:
+    <<: *gotenberg-base
+
+  gotenberg2:
+    <<: *gotenberg-base
+
+  gotenberg3:
+    <<: *gotenberg-base
+
+  api:
+    image: ghcr.io/cosmin2410/doc-engine-api:{{ api_image_tag }}
+    pull_policy: always
+    env_file:
+      - path: .env
+        required: true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '1'
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:8080/health']
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gotenberg1:
+        condition: service_started
+      gotenberg2:
+        condition: service_started
+      gotenberg3:
+        condition: service_started
+    expose:
+      - '8080'
+    deploy:
+      resources:
+        limits:
+          memory: {{ api_memory_limit }}
+          cpus: '{{ api_cpu_limit }}'
+        reservations:
+          memory: {{ api_memory_reservation }}
+          cpus: '{{ api_cpu_reservation }}'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+      - web
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  nginx:
+    image: nginx:{{ nginx_image_tag }}
+    ports:
+{% if app_environment == 'staging' %}
+      - '80:80'
+      - '443:443'
+{% else %}
+      - '443:443'
+{% endif %}
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '1'
+    deploy:
+      resources:
+        limits:
+          memory: {{ nginx_memory_limit }}
+          cpus: '{{ nginx_cpu_limit }}'
+        reservations:
+          memory: {{ nginx_memory_reservation }}
+          cpus: '{{ nginx_cpu_reservation }}'
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - internal
+      - web
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+{% if include_beszel %}
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    env_file:
+      - path: .env
+        required: true
+    expose:
+      - '8090'
+    volumes:
+      - beszel_data:/beszel_data
+    networks:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: {{ beszel_memory_limit }}
+          cpus: '{{ beszel_cpu_limit }}'
+        reservations:
+          memory: {{ beszel_memory_reservation }}
+          cpus: '{{ beszel_cpu_reservation }}'
+    healthcheck:
+      test: ['CMD', '/beszel', 'health', '--url', 'http://localhost:8090']
+      interval: 120s
+      start_period: 5s
+    restart: unless-stopped
+
+  beszel-agent:
+    image: henrygd/beszel-agent
+    container_name: beszel-agent
+    env_file:
+      - path: .env
+        required: true
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./beszel_agent_data:/var/lib/beszel-agent
+    restart: unless-stopped
+{% endif %}
+
+volumes:
+  pg_data:
+{% if include_beszel %}
+  beszel_data:
+{% endif %}
+
+networks:
+  internal:
+    driver: bridge
+  web:
+    driver: bridge

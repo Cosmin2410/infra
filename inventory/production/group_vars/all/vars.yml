@@ -1,0 +1,43 @@
+app_environment: production
+
+# Docker image tags
+api_image_tag: latest
+postgres_image_tag: '16-alpine'
+gotenberg_image_tag: '8'
+nginx_image_tag: alpine
+
+# Resource limits - PostgreSQL
+postgres_memory_limit: 1200m
+postgres_cpu_limit: '0.6'
+postgres_memory_reservation: 600m
+postgres_cpu_reservation: '0.3'
+
+# Resource limits - API
+api_memory_limit: 1024m
+api_memory_reservation: 512m
+api_cpu_limit: '0.6'
+api_cpu_reservation: '0.3'
+
+# Resource limits - Nginx
+nginx_memory_limit: 512m
+nginx_cpu_limit: '0.5'
+nginx_memory_reservation: 128m
+nginx_cpu_reservation: '0.25'
+
+# Resource limits - Gotenberg (per instance)
+gotenberg_memory_limit: 1024m
+gotenberg_cpu_limit: '0.5'
+gotenberg_memory_reservation: 512m
+gotenberg_cpu_reservation: '0.25'
+
+# Application
+app_port: 8080
+cgo_enabled: 0
+
+# Features
+include_beszel: false
+
+# Cloudflare Tunnel
+cloudflare_tunnel_id: b56260b7-26d4-475c-a602-025aea751ab9
+api_hostname: api.lazyfiller.com
+ssh_hostname: ssh.lazyfiller.com

@@ -1,0 +1,133 @@
+#!/bin/bash
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# Environment file
+ENV_FILE="$PROJECT_ROOT/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo -e "${RED}Error: .env file not found at $ENV_FILE${NC}"
+    echo "Please create a .env file with DB_URL"
+    exit 1
+fi
+
+# Safely read DB_URL from .env without sourcing the entire file
+DB_URL=$(grep -E "^DB_URL=" "$ENV_FILE" | cut -d '=' -f2- | tr -d '"' | tr -d "'")
+
+# Validate required environment variable
+if [ -z "$DB_URL" ]; then
+    echo -e "${RED}Error: Missing required environment variable DB_URL${NC}"
+    echo "DB_URL should contain the full PostgreSQL connection URL"
+    echo "Example: postgresql://user:password@postgres:5432/database?sslmode=disable"
+    echo "Note: Use @postgres: (Docker network) not @localhost:"
+    exit 1
+fi
+
+# Migration image from GHCR (environment-specific tag)
+MIGRATION_IMAGE="ghcr.io/cosmin2410/doc-engine-migrations:{{ api_image_tag }}"
+
+# Auto-detect Docker network
+DOCKER_NETWORK=$(docker network ls --format '{{ "{{.Name}}" }}' | grep -E '_internal$|^internal' | head -1)
+
+if [ -z "$DOCKER_NETWORK" ]; then
+    echo -e "${RED}Error: Could not find Docker network${NC}"
+    echo "Looking for networks ending with '_internal' or named 'internal'"
+    echo ""
+    echo "Available networks:"
+    docker network ls
+    echo ""
+    echo "Please ensure docker-compose services are running:"
+    echo "  cd $PROJECT_ROOT && docker compose up -d"
+    exit 1
+fi
+
+echo -e "${BLUE}Using Docker network: $DOCKER_NETWORK${NC}"
+
+# Backup directory
+BACKUP_DIR="$PROJECT_ROOT/backups"
+mkdir -p "$BACKUP_DIR"
+
+# Get the migration command (default to version if none provided)
+COMMAND="${1:-version}"
+
+# Interactive confirmation for destructive operations
+if [ "$COMMAND" = "down" ]; then
+    # Default to rollback 1 migration if not specified
+    ROLLBACK_COUNT="${2:-1}"
+    echo -e "${RED}Are you sure you want to run down migration? [y/N]${NC}"
+    read -r confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        echo -e "${YELLOW}Rollback cancelled.${NC}"
+        exit 1
+    fi
+    # Override arguments to specify count
+    set -- "down" "$ROLLBACK_COUNT"
+fi
+
+# Create backup before running up/down migrations
+if [ "$COMMAND" = "up" ] || [ "$COMMAND" = "down" ]; then
+    BACKUP_FILE="$BACKUP_DIR/pre-migration-$(date +%Y%m%d-%H%M%S).sql"
+    echo -e "${BLUE}Creating backup before migration...${NC}"
+
+    # Extract DB credentials for pg_dump
+    DB_HOST=$(echo "$DB_URL" | sed -n 's/.*@\([^:]*\):.*/\1/p')
+    DB_PORT=$(echo "$DB_URL" | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
+    DB_NAME=$(echo "$DB_URL" | sed -n 's/.*\/\([^?]*\).*/\1/p')
+    DB_USER=$(echo "$DB_URL" | sed -n 's/.*\/\/\([^:]*\):.*/\1/p')
+
+    # Find postgres container name
+    POSTGRES_CONTAINER=$(docker ps --format '{{ "{{.Names}}" }}' | grep -E 'postgres|db' | head -1)
+
+    if [ -n "$POSTGRES_CONTAINER" ]; then
+        if docker exec "$POSTGRES_CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" > "$BACKUP_FILE" 2>/dev/null; then
+            BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
+            echo -e "${GREEN}✓ Backup created: $BACKUP_FILE ($BACKUP_SIZE)${NC}"
+        else
+            echo -e "${YELLOW}Warning: Backup failed, but continuing with migration${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Warning: Could not find postgres container for backup${NC}"
+    fi
+fi
+
+# Pull latest migration image
+echo -e "${BLUE}Pulling migration image: $MIGRATION_IMAGE${NC}"
+docker pull "$MIGRATION_IMAGE" > /dev/null 2>&1
+
+# Run migration
+echo -e "${GREEN}Running migration command: $COMMAND${NC}"
+echo ""
+
+# Execute the migration
+docker run --rm \
+    --network "$DOCKER_NETWORK" \
+    "$MIGRATION_IMAGE" \
+    -path=/migrations \
+    -database "$DB_URL" \
+    "$@"
+
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "${GREEN}✓ Migration command completed successfully${NC}"
+
+    # Show backup location for up/down commands
+    if [ "$COMMAND" = "up" ] || [ "$COMMAND" = "down" ]; then
+        if [ -f "$BACKUP_FILE" ]; then
+            echo -e "${BLUE}Backup saved at: $BACKUP_FILE${NC}"
+        fi
+    fi
+else
+    echo -e "${RED}✗ Migration command failed with exit code $EXIT_CODE${NC}"
+    exit $EXIT_CODE
+fi
