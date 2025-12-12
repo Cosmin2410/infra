@@ -1,7 +1,9 @@
 app_environment: staging
+app_dir: /opt/app
 
 # Docker image tags
-api_image_tag: staging
+api_image: ghcr.io/cosmin2410/doc-engine-api:staging
+migration_image: ghcr.io/cosmin2410/doc-engine-migrations:staging
 postgres_image_tag: '16-alpine'
 gotenberg_image_tag: '8'
 nginx_image_tag: alpine
@@ -19,6 +21,7 @@ api_memory_reservation: 512m
 api_cpu_reservation: '0.25'
 
 # Resource limits - Nginx
+nginx_port: 90
 nginx_memory_limit: 512m
 nginx_cpu_limit: '0.5'
 nginx_memory_reservation: 128m
@@ -41,7 +44,8 @@ app_port: 8080
 cgo_enabled: 0
 
 # Features
-include_beszel: true
+is_staging: true
+is_development: false
 
 # Cloudflare Tunnel
 cloudflare_tunnel_id: 98e4d00b-a5be-474f-98a0-b49bf1448e0f

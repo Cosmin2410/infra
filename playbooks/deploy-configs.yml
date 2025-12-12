@@ -4,18 +4,20 @@
   gather_facts: true
 
   vars:
-    app_dir: /opt/app
-    nginx_dir: /opt/app/nginx
-    scripts_dir: /opt/app/scripts
-    backups_dir: /opt/app/backups
+    nginx_dir: "{{ app_dir }}/nginx"
+    scripts_dir: "{{ app_dir }}/scripts"
+    backups_dir: "{{ app_dir }}/backups"
+    file_owner: "{{ (is_development | default(false)) | ternary(omit, 'root') }}"
+    file_group: "{{ (is_development | default(false)) | ternary(omit, 'root') }}"
+    env_group: "{{ (is_development | default(false)) | ternary(omit, 'root') }}"
 
   pre_tasks:
     - name: Validate deployment target
       assert:
         that:
           - app_environment is defined
-          - app_environment in ['staging', 'production']
-        fail_msg: "app_environment must be 'staging' or 'production'"
+          - app_environment in ['staging', 'production', 'development']
+        fail_msg: "app_environment must be 'staging', 'production', or 'development'"
 
     - name: Verify app directory exists
       stat:
@@ -23,31 +25,25 @@
       register: app_dir_stat
       failed_when: not app_dir_stat.stat.exists
 
-    - name: Verify Docker is running
+    - name: Verify Docker is running (systemd)
       systemd:
         name: docker
         state: started
       check_mode: true
+      when: not is_development
 
-    - name: Login to GitHub Container Registry
-      shell: echo '{{ vault_ghcr_token }}' | docker login ghcr.io -u '{{ vault_ghcr_username }}' --password-stdin
-      no_log: true
+    - name: Verify Docker is running (development)
+      command: docker info
       changed_when: false
-
-    - name: Pull images before deployment
-      command: docker compose pull
-      args:
-        chdir: '{{ app_dir }}'
-      register: pull_result
-      changed_when: "'Pulled' in pull_result.stderr or 'Downloaded' in pull_result.stderr"
+      when: is_development
 
   tasks:
     - name: Ensure directories exist
       file:
         path: '{{ item }}'
         state: directory
-        owner: root
-        group: root
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
         mode: '0755'
       loop:
         - '{{ nginx_dir }}'
@@ -58,8 +54,8 @@
       template:
         src: ../templates/docker-compose.yml.j2
         dest: '{{ app_dir }}/docker-compose.yml'
-        owner: root
-        group: root
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
         mode: '0644'
       register: compose_config
 
@@ -67,8 +63,8 @@
       template:
         src: ../templates/nginx.conf.j2
         dest: '{{ nginx_dir }}/nginx.conf'
-        owner: root
-        group: root
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
         mode: '0644'
       register: nginx_config
 
@@ -76,18 +72,52 @@
       template:
         src: ../templates/env.j2
         dest: '{{ app_dir }}/.env'
-        owner: root
-        group: cmn
-        mode: '0640'
+        owner: "{{ file_owner }}"
+        group: "{{ env_group }}"
+        mode: '0644'
       register: env_config
 
     - name: Deploy migration script
       template:
         src: ../templates/migrate.sh.j2
         dest: '{{ scripts_dir }}/migrate.sh'
-        owner: root
-        group: root
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
         mode: '0755'
+
+    - name: Login to GitHub Container Registry
+      shell: echo '{{ vault_ghcr_token }}' | docker login ghcr.io -u '{{ vault_ghcr_username }}' --password-stdin
+      no_log: true
+      changed_when: false
+      when: app_environment != 'development'
+
+    - name: Pull images before deployment
+      command: docker compose pull
+      args:
+        chdir: '{{ app_dir }}'
+      register: pull_result
+      changed_when: "'Pulled' in pull_result.stderr or 'Downloaded' in pull_result.stderr"
+      when: app_environment != 'development'
+
+    - name: Validate docker-compose.yml syntax
+      command: docker compose -f docker-compose.yml config
+      args:
+        chdir: '{{ app_dir }}'
+      changed_when: false
+      register: compose_validation
+
+    - name: Validate migration script syntax
+      command: bash -n migrate.sh
+      args:
+        chdir: '{{ scripts_dir }}'
+      changed_when: false
+      register: script_validation
+
+    - name: Validation summary
+      debug:
+        msg: |
+          ✓ Docker Compose validation: PASSED
+          ✓ Migration script syntax validation: PASSED
 
     - name: Restart containers (config changed)
       when: compose_config.changed or env_config.changed

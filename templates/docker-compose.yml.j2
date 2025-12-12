@@ -75,11 +75,21 @@ services:
     <<: *gotenberg-base
 
   api:
-    image: ghcr.io/cosmin2410/doc-engine-api:{{ api_image_tag }}
+{% if is_development %}
+    build:
+      context: {{ app_dir }}
+      dockerfile: Dockerfile.dev
+{% endif %}
+    image: {{ api_image }}
     pull_policy: always
     env_file:
       - path: .env
         required: true
+    volumes:
+      - {{ app_dir }}/.env:/app/.env:ro
+{% if is_development %}
+      - {{ app_dir }}:/app
+{% endif %}
     logging:
       driver: json-file
       options:
@@ -120,13 +130,12 @@ services:
 
   nginx:
     image: nginx:{{ nginx_image_tag }}
+    env_file:
+      - path: .env
+        required: true
     ports:
-{% if app_environment == 'staging' %}
+      - '443:443'
       - '80:80'
-      - '443:443'
-{% else %}
-      - '443:443'
-{% endif %}
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     logging:
@@ -153,7 +162,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 10s
 
-{% if include_beszel %}
+{% if is_staging %}
   beszel:
     image: henrygd/beszel:latest
     container_name: beszel
@@ -195,7 +204,7 @@ services:
 
 volumes:
   pg_data:
-{% if include_beszel %}
+{% if is_staging %}
   beszel_data:
 {% endif %}
 

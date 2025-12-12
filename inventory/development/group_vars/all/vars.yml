@@ -1,24 +1,24 @@
-app_environment: production
-app_dir: /opt/app
+app_environment: development
+app_dir: /Users/naecosmin/Desktop/projects/lazyfiller/doc-engine
 
-# Docker image tags
-api_image: ghcr.io/cosmin2410/doc-engine-api:latest
-migration_image: ghcr.io/cosmin2410/doc-engine-migrations:latest
+# Docker images
+api_image: doc-engine-api:local
+migration_image: doc-engine-migrations:local
 postgres_image_tag: '16-alpine'
 gotenberg_image_tag: '8'
 nginx_image_tag: alpine
 
 # Resource limits - PostgreSQL
-postgres_memory_limit: 1200m
-postgres_cpu_limit: '0.6'
-postgres_memory_reservation: 600m
-postgres_cpu_reservation: '0.3'
+postgres_memory_limit: 512m
+postgres_cpu_limit: '0.25'
+postgres_memory_reservation: 256m
+postgres_cpu_reservation: '0.15'
 
 # Resource limits - API
 api_memory_limit: 1024m
+api_cpu_limit: '0.5'
 api_memory_reservation: 512m
-api_cpu_limit: '0.6'
-api_cpu_reservation: '0.3'
+api_cpu_reservation: '0.25'
 
 # Resource limits - Nginx
 nginx_port: 90
@@ -39,9 +39,8 @@ cgo_enabled: 0
 
 # Features
 is_staging: false
-is_development: false
+is_development: true
 
-# Cloudflare Tunnel
-cloudflare_tunnel_id: b56260b7-26d4-475c-a602-025aea751ab9
-api_hostname: api.lazyfiller.com
-ssh_hostname: ssh.lazyfiller.com
+# Local hostnames (used in nginx config)
+api_hostname: localhost
+ssh_hostname: localhost
