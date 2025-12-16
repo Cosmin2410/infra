@@ -119,7 +119,7 @@
           ✓ Docker Compose validation: PASSED
           ✓ Migration script syntax validation: PASSED
 
-    - name: Restart containers (config changed)
+    - name: Restart containers (compose/.env changed)
       when: compose_config.changed or env_config.changed
       block:
         - name: Bring up containers
@@ -152,9 +152,16 @@
               Recent logs:
               {{ failed_logs.stdout }}
 
-    - name: Reload nginx only (nginx config changed)
-      when: nginx_config.changed and not compose_config.changed and not env_config.changed
-      command: docker compose exec -T nginx nginx -s reload
+    - name: Validate nginx config (nginx change)
+      when: nginx_config.changed
+      command: docker compose exec -T nginx nginx -t
+      args:
+        chdir: '{{ app_dir }}'
+      changed_when: false
+
+    - name: Restart nginx (nginx change)
+      when: nginx_config.changed
+      command: docker compose restart nginx
       args:
         chdir: '{{ app_dir }}'
 
