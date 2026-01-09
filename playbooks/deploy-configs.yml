@@ -154,7 +154,7 @@
 
     - name: Validate nginx config (nginx change)
       when: nginx_config.changed
-      command: docker compose exec -T nginx nginx -t
+      command: docker compose run --rm -T --no-deps nginx nginx -t
       args:
         chdir: '{{ app_dir }}'
       changed_when: false
